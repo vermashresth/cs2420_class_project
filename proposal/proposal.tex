@@ -51,8 +51,12 @@ double the entire 8~GB shared memory of a
 Even the smaller $\pi_0$ contains approximately 3.3 billion parameters,
 requiring about 6.6~GB for its 16-bit weights alone, before accounting
 for inference buffers, perception, and control software.
-Even on a desktop RTX 4090, OpenVLA runs at only about 6 queries per
-second, while edge modules offer 4--10$\times$ less memory bandwidth.
+Fitting in memory is also not sufficient. Jetson memory is shared
+between the CPU, the GPU, the operating system, and the rest of the
+robot software stack, and at batch size one every generated action
+token must stream all model weights from memory. On a 16~GB Orin NX,
+a 16-bit OpenVLA therefore needs roughly one second per action even
+if it fits, far too slow for closed-loop control.
 Figure~\ref{fig:deployment-gap} summarizes this gap between policy
 requirements and edge hardware.
 
@@ -96,7 +100,7 @@ requirements and edge hardware.
             at (axis cs:24,{[normalized]3.6}) {RTX 4090\\(24)};
         \end{axis}
         \end{tikzpicture}
-        \caption{Policy memory vs.\ device memory.}
+        \caption{Policy memory vs.\ total device memory.}
         \label{fig:memory}
     \end{subfigure}\hfill
     \begin{subfigure}[b]{0.49\linewidth}
@@ -104,51 +108,64 @@ requirements and edge hardware.
         \begin{tikzpicture}
         \begin{axis}[
             width=\linewidth, height=5.6cm,
-            xmode=log, ymode=log,
-            xmin=18, xmax=1000, ymin=60, ymax=2000,
-            xlabel={Max power (W)},
-            ylabel={Memory bandwidth (GB/s)},
-            xlabel style={font=\small}, ylabel style={font=\small},
-            ticklabel style={font=\scriptsize},
-            log ticks with fixed point,
-            xtick={25,50,100,200,400,800},
-            ytick={100,200,500,1000},
+            ybar, bar width=5pt, area legend,
+            ymin=0, ymax=1150,
+            ylabel={Time per action (ms)},
+            ylabel style={font=\small},
+            symbolic x coords={NX,AGX,Thor,4090},
+            xtick=data,
+            xticklabels={{Orin NX\\16GB},{AGX\\Orin},{AGX\\Thor},{RTX\\4090}},
+            xticklabel style={align=center, font=\scriptsize},
+            yticklabel style={font=\scriptsize},
+            enlarge x limits=0.15,
+            legend style={font=\scriptsize, draw=none, fill=none,
+                at={(0.98,0.98)}, anchor=north east},
+            legend cell align=left,
             axis x line*=bottom, axis y line*=left,
-            clip=false,
         ]
-        \addplot[only marks, mark=*, mark size=2.2pt, color=blue!70!black,
-            nodes near coords, point meta=explicit symbolic,
-            nodes near coords style={font=\scriptsize, color=black}]
-            table[meta=label] {
-                x    y      label
-                25   102    {}
-                40   102.4  {}
-                60   204.8  {}
-                130  273    {}
-                450  1008   {}
-            };
-        \node[font=\scriptsize, anchor=north] at (axis cs:25,102) {Nano Super};
-        \node[font=\scriptsize, anchor=south] at (axis cs:40,102.4) {NX 16GB};
-        \node[font=\scriptsize, anchor=east] at (axis cs:60,204.8) {AGX Orin};
-        \node[font=\scriptsize, anchor=south east] at (axis cs:130,273) {AGX Thor};
-        \node[font=\scriptsize, anchor=east] at (axis cs:450,1008) {RTX 4090};
+        \addplot[fill=red!55, draw=red!70!black]
+            coordinates {(NX,1039) (AGX,520) (Thor,390) (4090,106)};
+        \addplot[fill=orange!55, draw=orange!70!black]
+            coordinates {(NX,540) (AGX,270) (Thor,203) (4090,55)};
+        \addplot[fill=blue!45, draw=blue!70!black]
+            coordinates {(NX,273) (AGX,137) (Thor,103) (4090,28)};
+        \addplot[only marks, mark=diamond*, mark size=2.6pt, black, xshift=-7pt,
+            forget plot, nodes near coords={955},
+            nodes near coords style={font=\tiny, anchor=south}]
+            coordinates {(AGX,955)};
+        \addplot[only marks, mark=diamond*, mark size=2.6pt, black, xshift=0pt,
+            forget plot, nodes near coords={574},
+            nodes near coords style={font=\tiny, anchor=south}]
+            coordinates {(AGX,574)};
+        \addplot[only marks, mark=diamond*, mark size=2.6pt, black, xshift=7pt,
+            forget plot, nodes near coords={375},
+            nodes near coords style={font=\tiny, anchor=south}]
+            coordinates {(AGX,375)};
+        \addlegendimage{legend image code/.code={
+            \draw[black, mark=diamond*, mark size=2.6pt]
+                plot[only marks] coordinates {(0.3cm,0cm)};}}
+        \legend{16-bit (bound), INT8 (bound), INT4 (bound),
+            Measured (QAIL)}
         \end{axis}
         \end{tikzpicture}
-        \caption{Bandwidth vs.\ power budget.}
-        \label{fig:bandwidth}
+        \caption{OpenVLA decoding time per action.}
+        \label{fig:latency}
     \end{subfigure}
     \caption{The deployment gap.
         (a) Memory needed by OpenVLA at different precisions and by
-        $\pi_0$'s 16-bit weights, against the memory of edge devices
-        (dashed). Jetson memory is shared by CPU and GPU.
-        (b) Edge modules trade memory bandwidth, which bounds
-        batch-size-one decoding, for a lower power budget.
+        $\pi_0$'s 16-bit weights, against each device's total memory
+        (dashed). Jetson memory is shared by the CPU, GPU, operating
+        system, and robot software, so the usable budget is lower.
+        (b) Bandwidth lower bound on the time to generate OpenVLA's
+        7 action tokens, $7 \times (\text{weight bytes}) /
+        (\text{memory bandwidth})$, ignoring image and instruction
+        processing. Diamonds are latencies measured by QAIL on the
+        AGX Orin; end-to-end latency is 2--3$\times$ the bound.
         Sources: \href{https://arxiv.org/abs/2406.09246}{OpenVLA},
         \href{https://arxiv.org/abs/2410.24164}{$\pi_0$},
         \href{https://arxiv.org/abs/2412.01034}{QAIL}, and
         \href{https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/}{NVIDIA}
-        specifications; power figures are specified maxima, not measured
-        inference power.}
+        specifications.}
     \label{fig:deployment-gap}
 \end{figure}
 
