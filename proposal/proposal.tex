@@ -201,84 +201,155 @@ We also consider training the router with reinforcement learning,
 treating precision selection as a policy, as an extension.
 
 \section{Problem Formulation}
- 
+
 \subsection{Setup}
- 
-We consider an MDP $\mathcal{M} = (\mathcal{S}, \mathcal{A}, P, r, \gamma, \rho_0)$.
-Let $\pi_1$ be a pretrained full-precision RL policy. By post-training quantization of $\pi_1$
-we obtain a family of frozen policies $\{\pi_k\}_{k=1}^{K}$ at bit-widths
-$\B = \{b_1 > b_2 > \dots > b_K\}$, where $\pi_1$ serves as the reference policy.
-Each policy has a per-call inference cost $c_k > 0$ (latency or energy, measured on the
-target hardware), with $c_1 > c_2 > \dots > c_K$.
- 
-A router $g_\phi(k \mid z_t)$ selects which policy to query at each step, where
-$z_t = f(s_t, k_{t-1})$ is a cheap feature vector (e.g., proprioception, previous action,
-previous precision choice). The routed policy $\pi_\phi$ acts as
+
+We model robot manipulation as a finite-horizon decision process with
+state space $\mathcal{S}$, action space $\mathcal{A}$, transition
+kernel $P$, initial-state distribution $\rho_0$, and horizon $T$.
+The input to the policy at time $t$, which we write $s_t$, consists of
+the camera image, proprioception, and the language instruction.
+An episode $\tau = (s_0, a_0, \dots, s_T)$ either completes the task or
+does not; we denote success by the indicator $\mathrm{succ}(\tau) \in
+\{0,1\}$. We do not assume access to a dense reward or a learned value
+function, since VLA policies are trained by imitation rather than
+reinforcement learning.
+
+Let $\pi_1$ be a pretrained full-precision VLA policy. Post-training
+quantization of $\pi_1$ yields a family of frozen policies
+$\{\pi_k\}_{k=1}^{K}$ at bit-widths
+$\B = \{b_1 > b_2 > \dots > b_K\}$, with $\pi_1$ serving as the
+reference. Each policy has a per-call inference cost $c_k > 0$
+(latency or energy measured on the target hardware), with
+$c_1 > c_2 > \dots > c_K$.
+
+A router $g_\phi(k \mid z_t)$ selects which policy to query at each
+step from a cheap feature vector $z_t = f(s_t, a_{t-1}, k_{t-1})$,
+such as proprioception, recent actions, and the previous precision
+choice. The routed policy $\pi_\phi$ acts as
 \begin{equation}
   k_t \sim g_\phi(\cdot \mid z_t), \qquad a_t \sim \pi_{k_t}(\cdot \mid s_t).
 \end{equation}
- 
-Our goal is to maximize return while minimizing compute:
+Our goal is to maximize task success while minimizing compute:
 \begin{equation}
-  \max_\phi \; J(\pi_\phi) - \lambda\, C(\pi_\phi),
-  \quad
-  J(\pi_\phi) = \E_{\pi_\phi}\Big[\sum_{t\ge 0} \gamma^t r(s_t, a_t)\Big],
-  \quad
-  C(\pi_\phi) = \E_{\pi_\phi}\Big[\sum_{t\ge 0} \gamma^t c_{k_t}\Big].
+  \max_\phi \; S(\pi_\phi) - \lambda\, C(\pi_\phi),
+  \qquad
+  S(\pi_\phi) = \Pr_{\tau \sim \pi_\phi}\big[\mathrm{succ}(\tau) = 1\big],
+  \qquad
+  C(\pi_\phi) = \E_{\tau \sim \pi_\phi}\Big[\sum_{t=0}^{T-1} c_{k_t}\Big],
   \label{eq:objective}
 \end{equation}
- 
+where $\lambda \ge 0$ trades off success against compute.
+
 \subsection{Per-state Cost of Reduced Precision}
- 
-We define the precision gap of policy $k$ at state $s$ as the loss in value from acting
-with $\pi_k$ instead of the reference policy $\pi_1$:
+
+Optimizing Eq.~\eqref{eq:objective} directly requires knowing how a
+single low-precision decision changes the probability of success,
+which is unavailable without a critic. Instead, we treat the
+full-precision policy as the reference behavior and measure how far
+each quantized policy deviates from it. We define the
+\emph{precision gap} of policy $k$ at state $s$ as
 \begin{equation}
-  \Delta_k(s) \;=\; \E_{a \sim \pi_1(\cdot\mid s)}\big[Q^{\pi_1}(s,a)\big]
-  - \E_{a \sim \pi_k(\cdot\mid s)}\big[Q^{\pi_1}(s,a)\big],
-  \qquad \Delta_1(s) = 0.
+  \Delta_k(s) \;=\; D\big(\pi_1(\cdot \mid s),\, \pi_k(\cdot \mid s)\big),
+  \qquad \Delta_1(s) = 0,
 \end{equation}
-States where $\Delta_k(s)$ is small tolerate low precision, while states where it is large
-require high precision. The router should therefore pick, at each visited state, the cheapest
-policy whose precision gap is acceptable:
+for a divergence $D$ between action distributions.
+
+This choice is justified by a standard simulation argument. Let
+$d_t^{\pi_\phi}$ be the distribution of $s_t$ under the routed policy.
+Because success is an event on trajectories, and the total variation
+(TV) distance between the trajectory distributions of two policies is
+at most the sum of their expected per-step action TV distances,
 \begin{equation}
-  \min_\phi \; \E_{s \sim d^{\pi_\phi}}\Big[\sum_{k=1}^{K} g_\phi(k \mid z(s))
-  \big(\Delta_k(s) + \lambda c_k\big)\Big],
+\begin{aligned}
+  \big| S(\pi_1) - S(\pi_\phi) \big|
+  &\;\le\; \sum_{t=0}^{T-1} \E_{s_t \sim d_t^{\pi_\phi}}
+  \Big[\mathrm{TV}\big(\pi_1(\cdot \mid s_t), \pi_\phi(\cdot \mid s_t)\big)\Big] \\
+  &\;\le\; \sum_{t=0}^{T-1} \E_{s_t \sim d_t^{\pi_\phi}}
+  \Big[\sum_{k=1}^{K} g_\phi(k \mid z_t)\, \Delta_k^{\mathrm{TV}}(s_t)\Big],
+\end{aligned}
+  \label{eq:success_bound}
+\end{equation}
+where the second inequality uses convexity of TV in the mixture
+$\pi_\phi(\cdot \mid s_t) = \sum_k g_\phi(k \mid z_t)\, \pi_k(\cdot \mid s_t)$,
+and $\Delta_k^{\mathrm{TV}}(s) \le \sqrt{D_{\mathrm{KL}}(\pi_1 \Vert \pi_k)(s)/2}$
+by Pinsker's inequality. States where $\Delta_k(s)$ is small tolerate
+low precision, while states where it is large require high precision.
+Combining Eqs.~\eqref{eq:objective} and~\eqref{eq:success_bound}, the
+router should pick, at each visited state, the cheapest policy whose
+precision gap is acceptable:
+\begin{equation}
+  \min_\phi \; \E_{\tau \sim \pi_\phi}\Big[\sum_{t=0}^{T-1}
+  \sum_{k=1}^{K} g_\phi(k \mid z_t)\big(\Delta_k(s_t) + \lambda c_k\big)\Big].
   \label{eq:router_objective}
 \end{equation}
-where $d^{\pi_\phi}$ is the state distribution visited by the routed policy, and $\lambda$
-trades off performance against compute.
- 
+The expectation is over states visited by the routed policy, not by
+$\pi_1$, which matters because routing decisions change which states
+are reached.
+
 \subsection{Estimating $\Delta_k(s)$}
- 
-We consider three estimators, in increasing order of cost and fidelity:
-\begin{enumerate}
-  \item \textbf{Action divergence (myopic proxy):}
-        $\hat{\Delta}_k(s) = \lVert \mu_k(s) - \mu_1(s) \rVert_2$ or
-        $D_{\mathrm{KL}}\big(\pi_1(\cdot\mid s)\,\Vert\,\pi_k(\cdot\mid s)\big)$,
-        where $\mu_k$ is the mean action of $\pi_k$.
-  \item \textbf{Critic-based:} using the critic $\hat{Q}$ learned while training $\pi_1$,
-        $\hat{\Delta}_k(s) = \hat{Q}(s, \mu_1(s)) - \hat{Q}(s, \mu_k(s))$.
-  \item \textbf{Counterfactual rollouts:} from $s$, execute one action from $\pi_k$, then follow
-        $\pi_1$ for $H$ steps; average over $M$ rollouts with shared random seeds:
-        $\hat{\Delta}_k(s) = \frac{1}{M}\sum_{m=1}^{M}\big(G^{(1)}_m(s) - G^{(k)}_m(s)\big)$,
-        where $G^{(k)}_m(s)$ is the return of the $m$-th rollout.
-\end{enumerate}
- 
+
+The bound in Eq.~\eqref{eq:success_bound} is worst case: it assumes
+every deviation is never corrected. In practice, the policy can
+recover from a small deviation in free space but not from a missed
+grasp. We therefore consider two estimators of $\Delta_k(s)$, in
+increasing order of cost and fidelity.
+
+\paragraph{Myopic action divergence.}
+Running all $K$ policies on the same input $s$ gives their action
+distributions directly. For OpenVLA, an action is a sequence of
+$J = 7$ discrete tokens $a = (a^1, \dots, a^J)$, so by the chain rule
+the KL divergence decomposes exactly over tokens:
+\begin{equation}
+  \hat{\Delta}_k^{\mathrm{KL}}(s) = \sum_{j=1}^{J}
+  \E_{a^{<j} \sim \pi_1}\Big[ D_{\mathrm{KL}}\big(
+  \pi_1(a^j \mid s, a^{<j}) \,\Vert\, \pi_k(a^j \mid s, a^{<j}) \big)\Big],
+\end{equation}
+which we evaluate by teacher-forcing both models on the tokens
+decoded by $\pi_1$. For policies with continuous actions such as
+$\pi_0$, we use the expected squared distance between actions,
+$\hat{\Delta}_k^{\ell_2}(s) = \E\big[\lVert a^{(1)} - a^{(k)} \rVert_2^2\big]$,
+with shared sampling noise. This estimator costs one forward pass per
+policy but ignores whether a deviation actually affects the outcome.
+
+\paragraph{Multi-step rollout divergence.}
+To capture whether a deviation compounds or is corrected, we reset the
+simulator to $s$, execute one action from $\pi_k$, and then follow
+$\pi_1$ for $H$ steps, comparing against a rollout that follows
+$\pi_1$ throughout with the same random seed:
+\begin{equation}
+  \hat{\Delta}_k^{H}(s) = \frac{1}{M} \sum_{m=1}^{M}
+  d\big(x^{(k)}_{m,H}(s),\, x^{(1)}_{m,H}(s)\big),
+\end{equation}
+where $x^{(k)}_{m,H}(s)$ is the end-effector and object state after
+$H$ steps in the $m$-th rollout and $d$ is a distance on that state.
+Running the rollouts to the end of the episode
+($H = T - t$) and comparing success instead of state gives a direct
+Monte Carlo estimate of the drop in success probability,
+$\hat{\Delta}_k^{\mathrm{succ}}(s) = \frac{1}{M}\sum_{m}
+\big(\mathrm{succ}(\tau_m^{(1)}) - \mathrm{succ}(\tau_m^{(k)})\big)$,
+at the highest cost. These estimators require resetting the simulator
+to arbitrary states, which LIBERO supports.
+
 \subsection{Supervised Router Training}
- 
+
 \paragraph{Data generation.}
 \begin{enumerate}
-  \item Roll out $\pi_1$ for $N$ episodes to collect an initial state dataset $\mathcal{D}$.
-  \item For each $s \in \mathcal{D}$, run all $K$ policies on the same input, compute
-        $\{\hat{\Delta}_k(s)\}_{k=1}^{K}$, and store $\big(z(s), \{\hat{\Delta}_k(s)\}_k\big)$.
+  \item Roll out $\pi_1$ for $N$ episodes to collect an initial state
+        dataset $\mathcal{D}$.
+  \item For each $s \in \mathcal{D}$, run all $K$ policies on the same
+        input, compute $\{\hat{\Delta}_k(s)\}_{k=1}^{K}$, and store
+        $\big(z(s), \{\hat{\Delta}_k(s)\}_k\big)$.
   \item Train $g_\phi$ on $\mathcal{D}$ using the loss below.
-  \item Roll out the routed policy $\pi_\phi$, label the newly visited states, add them to
-        $\mathcal{D}$, and retrain (DAgger-style). Repeat for $I$ iterations, so that the
-        training states match $d^{\pi_\phi}$ in Eq.~\eqref{eq:router_objective}.
+  \item Roll out the routed policy $\pi_\phi$, label the newly visited
+        states, add them to $\mathcal{D}$, and retrain (DAgger-style).
+        Repeat for $I$ iterations so that the training states match
+        the distribution in Eq.~\eqref{eq:router_objective}.
 \end{enumerate}
- 
-\paragraph{Loss: weighted cross-entropy.} Each state receives a hard label, either the
-best trade-off or the lowest precision within a tolerance $\epsilon$:
+
+\paragraph{Loss: weighted cross-entropy.}
+Each state receives a hard label, either the best tradeoff or the
+lowest precision within a tolerance $\epsilon$:
 \begin{equation}
   y(s) = \arg\min_{k} \big[\hat{\Delta}_k(s) + \lambda c_k\big]
   \qquad \text{or} \qquad
@@ -291,7 +362,8 @@ The router is trained with
   \qquad
   w(s) = 1 + \alpha \max_k \hat{\Delta}_k(s),
 \end{equation}
-where $w(s)$ up-weights critical states, where misrouting is most costly.
+where $w(s)$ up-weights critical states, at which misrouting is most
+costly.
 
 \section{Experiments}
 \section{Evaluation}
