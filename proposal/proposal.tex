@@ -8,6 +8,9 @@
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{array}
+\usepackage{subcaption}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\B}{\mathcal{B}}
 %\usepackage[colorlinks=true, urlcolor=blue, linkcolor=black]{hyperref}
@@ -48,131 +51,106 @@ double the entire 8~GB shared memory of a
 Even the smaller $\pi_0$ contains approximately 3.3 billion parameters,
 requiring about 6.6~GB for its 16-bit weights alone, before accounting
 for inference buffers, perception, and control software.
-Tables~\ref{tab:policy-comparison} and~\ref{tab:edge-hardware}
-summarize this gap between policy requirements and edge hardware.
+Even on a desktop RTX 4090, OpenVLA runs at only about 6 queries per
+second, while edge modules offer 4--10$\times$ less memory bandwidth.
+Figure~\ref{fig:deployment-gap} summarizes this gap between policy
+requirements and edge hardware.
 
-\begin{table}[!htbp]
+\begin{figure}[!htbp]
     \centering
-    \small
-    \setlength{\tabcolsep}{5pt}
-    \renewcommand{\arraystretch}{1.15}
-    \caption{Representative VLA policy characteristics.}
-    \label{tab:policy-comparison}
-    \begin{tabularx}{\linewidth}{
-        @{}
-        >{\raggedright\arraybackslash}p{0.23\linewidth}
-        >{\raggedright\arraybackslash}X
-        >{\raggedright\arraybackslash}X
-        @{}
-    }
-        \toprule
-        \textbf{Characteristic}
-        & \textbf{OpenVLA}
-        & \textbf{$\pi_0$} \\
-        \midrule
-
-        Model size
-        & Approximately 7B; Llama-2 backbone with visual encoders
-        & Approximately 3.3B; 3B backbone and 300M action expert \\
-
-        16-bit memory
-        & Approximately 15~GB or more for inference
-        & Approximately 6.6~GB for weights alone \\
-
-        RTX 4090 inference
-        & Approximately 167~ms ($6$ queries/s)
-        & 73~ms per action-chunk query \\
-
-        Action generation
-        & Autoregressive action tokens
-        & 50-step action chunks \\
-
-        \bottomrule
-    \end{tabularx}
-
-    \vspace{3pt}
-    \parbox{\linewidth}{\footnotesize
-        Sources:
-        \href{https://arxiv.org/abs/2406.09246}{OpenVLA}
-        and
-        \href{https://arxiv.org/abs/2410.24164}{$\pi_0$}.
-        Memory entries describe different quantities as indicated.
-        Desktop timings use different workloads and are not
-        controlled cross-model comparisons.
-    }
-\end{table}
-
-\begin{table}[!htbp]
-    \centering
-    \small
-    \setlength{\tabcolsep}{4pt}
-    \renewcommand{\arraystretch}{1.15}
-    \caption{Representative hardware specifications.}
-    \label{tab:edge-hardware}
-    \begin{tabularx}{\linewidth}{
-        @{}
-        >{\raggedright\arraybackslash}p{0.25\linewidth}
-        >{\raggedright\arraybackslash}p{0.15\linewidth}
-        r
-        >{\raggedright\arraybackslash}X
-        r
-        @{}
-    }
-        \toprule
-        \textbf{Device}
-        & \textbf{Memory}
-        & \textbf{GB/s}
-        & \textbf{Advertised peak}
-        & \textbf{Power (W)} \\
-        \midrule
-
-        Orin Nano Super
-        & 8~GB LPDDR5
-        & 102
-        & 67 INT8 TOPS
-        & 7--25 \\
-
-        Orin NX 16~GB
-        & 16~GB LPDDR5
-        & 102.4
-        & 100 / 157 INT8 TOPS
-        & 10--40 \\
-
-        AGX Orin 64~GB
-        & 64~GB LPDDR5
-        & 204.8
-        & 275 INT8 TOPS
-        & 15--60 \\
-
-        AGX Thor T5000
-        & 128~GB LPDDR5X
-        & 273
-        & 2,070 FP4 TFLOPS
-        & 40--130 \\
-
-        RTX 4090
-        & 24~GB GDDR6X
-        & 1,008
-        & Not compared
-        & 450 \\
-
-        \bottomrule
-    \end{tabularx}
-
-    \vspace{3pt}
-    \parbox{\linewidth}{\footnotesize
-        Manufacturer specifications summarized in the project notes;
-        see also
-        \href{https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/}
-        {NVIDIA's Jetson Orin specifications}.
-        Jetson memory is shared by CPU and GPU; RTX 4090 memory is
-        dedicated GPU memory.
-        Peak AI figures assume sparsity and use different numerical
-        formats, so they are not directly comparable.
-        The NX's 157~TOPS figure refers to Super mode.
-        Power entries are specifications, not measured inference power.
-    }
-\end{table}
+    \begin{subfigure}[b]{0.49\linewidth}
+        \centering
+        \begin{tikzpicture}
+        \begin{axis}[
+            width=\linewidth, height=5.6cm,
+            xbar, bar width=9pt,
+            xmin=0, xmax=27,
+            xlabel={Memory (GB)},
+            symbolic y coords={pi0-16,OVLA-4,OVLA-8,OVLA-16},
+            ytick=data,
+            yticklabels={{$\pi_0$ 16-bit\\(weights)},{OpenVLA\\INT4},{OpenVLA\\INT8},{OpenVLA\\16-bit}},
+            yticklabel style={align=right, font=\scriptsize},
+            xticklabel style={font=\scriptsize},
+            xlabel style={font=\small},
+            enlarge y limits=0.18,
+            nodes near coords,
+            nodes near coords style={font=\scriptsize, anchor=west,
+                fill=white, inner sep=1pt,
+                /pgf/number format/.cd, fixed, fixed zerofill, precision=1},
+            axis x line*=bottom, axis y line*=left,
+            clip=false,
+        ]
+        \addplot[fill=blue!45, draw=blue!70!black]
+            coordinates {(6.6,pi0-16) (4.0,OVLA-4) (7.9,OVLA-8) (15.2,OVLA-16)};
+        \draw[draw=red!70!black, dashed, thick]
+            (axis cs:8,{[normalized]-0.6}) -- (axis cs:8,{[normalized]3.6});
+        \draw[draw=red!70!black, dashed, thick]
+            (axis cs:16,{[normalized]-0.6}) -- (axis cs:16,{[normalized]3.6});
+        \draw[draw=red!70!black, dashed, thick]
+            (axis cs:24,{[normalized]-0.6}) -- (axis cs:24,{[normalized]3.6});
+        \node[font=\scriptsize, red!70!black, align=center, anchor=south]
+            at (axis cs:8,{[normalized]3.6}) {Orin Nano\\Super (8)};
+        \node[font=\scriptsize, red!70!black, align=center, anchor=south]
+            at (axis cs:16,{[normalized]3.6}) {Orin NX\\(16)};
+        \node[font=\scriptsize, red!70!black, align=center, anchor=south]
+            at (axis cs:24,{[normalized]3.6}) {RTX 4090\\(24)};
+        \end{axis}
+        \end{tikzpicture}
+        \caption{Policy memory vs.\ device memory.}
+        \label{fig:memory}
+    \end{subfigure}\hfill
+    \begin{subfigure}[b]{0.49\linewidth}
+        \centering
+        \begin{tikzpicture}
+        \begin{axis}[
+            width=\linewidth, height=5.6cm,
+            xmode=log, ymode=log,
+            xmin=18, xmax=1000, ymin=60, ymax=2000,
+            xlabel={Max power (W)},
+            ylabel={Memory bandwidth (GB/s)},
+            xlabel style={font=\small}, ylabel style={font=\small},
+            ticklabel style={font=\scriptsize},
+            log ticks with fixed point,
+            xtick={25,50,100,200,400,800},
+            ytick={100,200,500,1000},
+            axis x line*=bottom, axis y line*=left,
+            clip=false,
+        ]
+        \addplot[only marks, mark=*, mark size=2.2pt, color=blue!70!black,
+            nodes near coords, point meta=explicit symbolic,
+            nodes near coords style={font=\scriptsize, color=black}]
+            table[meta=label] {
+                x    y      label
+                25   102    {}
+                40   102.4  {}
+                60   204.8  {}
+                130  273    {}
+                450  1008   {}
+            };
+        \node[font=\scriptsize, anchor=north] at (axis cs:25,102) {Nano Super};
+        \node[font=\scriptsize, anchor=south] at (axis cs:40,102.4) {NX 16GB};
+        \node[font=\scriptsize, anchor=east] at (axis cs:60,204.8) {AGX Orin};
+        \node[font=\scriptsize, anchor=south east] at (axis cs:130,273) {AGX Thor};
+        \node[font=\scriptsize, anchor=east] at (axis cs:450,1008) {RTX 4090};
+        \end{axis}
+        \end{tikzpicture}
+        \caption{Bandwidth vs.\ power budget.}
+        \label{fig:bandwidth}
+    \end{subfigure}
+    \caption{The deployment gap.
+        (a) Memory needed by OpenVLA at different precisions and by
+        $\pi_0$'s 16-bit weights, against the memory of edge devices
+        (dashed). Jetson memory is shared by CPU and GPU.
+        (b) Edge modules trade memory bandwidth, which bounds
+        batch-size-one decoding, for a lower power budget.
+        Sources: \href{https://arxiv.org/abs/2406.09246}{OpenVLA},
+        \href{https://arxiv.org/abs/2410.24164}{$\pi_0$},
+        \href{https://arxiv.org/abs/2412.01034}{QAIL}, and
+        \href{https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/}{NVIDIA}
+        specifications; power figures are specified maxima, not measured
+        inference power.}
+    \label{fig:deployment-gap}
+\end{figure}
 
 Prior work has shown that quantization is an effective way to close
 this gap. On a Jetson AGX Orin,
