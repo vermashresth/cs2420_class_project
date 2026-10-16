@@ -8,6 +8,8 @@
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{array}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\B}{\mathcal{B}}
 %\usepackage[colorlinks=true, urlcolor=blue, linkcolor=black]{hyperref}
 % Define shortcuts
 % \newcommand{\red}[1]{\textcolor{red}{#1}}
@@ -22,27 +24,32 @@
 \begin{document}
 \maketitle
 
-\section{Problem Statement}
-How can robot policies be deployed efficiently on compute-limited edge devices while achieving both a high success rate and low latency?
+\section{Introduction}
 
-\section{Motivation}
+Robot policies are increasingly built on top of large vision-language
+models (VLMs). Vision-language-action (VLA) models such as
+\href{https://arxiv.org/abs/2307.15818}{RT-2},
+\href{https://arxiv.org/abs/2406.09246}{OpenVLA}, and
+\href{https://arxiv.org/abs/2410.24164}{$\pi_0$} fine-tune a pretrained
+VLM backbone to map camera images and a natural-language instruction
+directly to robot actions. Inheriting internet-scale visual and semantic
+knowledge allows a single generalist policy to follow open-ended
+instructions, recognize novel objects and scenes, and transfer across
+tasks and embodiments far better than policies trained from scratch on
+robot data alone.
 
-\subsection{Onboard resource constraints.}
-Vision-language-action (VLA) policies impose substantial memory,
-bandwidth, and power demands on embedded robots.
-\href{https://arxiv.org/abs/2406.09246}{OpenVLA} requires approximately
-15~GB in a 16-bit configuration, exceeding the entire 8~GB shared
-memory of a
-\href{https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/}
-{Jetson Orin Nano Super}.
-Even the smaller
-\href{https://arxiv.org/abs/2410.24164}{$\pi_0$ architecture}
-contains approximately 3.3 billion parameters, requiring about
-6.6~GB for 16-bit weights alone, before accounting for inference
-buffers, perception, and control software.
-
+This capability comes at a substantial computational cost. VLA policies
+impose memory, bandwidth, and power demands that exceed what is
+available onboard most robots, yet closed-loop control requires low and
+predictable latency that offloading to a remote server cannot guarantee.
+OpenVLA requires approximately 15~GB in a 16-bit configuration, nearly
+double the entire 8~GB shared memory of a
+\href{https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/}{Jetson Orin Nano Super}.
+Even the smaller $\pi_0$ contains approximately 3.3 billion parameters,
+requiring about 6.6~GB for its 16-bit weights alone, before accounting
+for inference buffers, perception, and control software.
 Tables~\ref{tab:policy-comparison} and~\ref{tab:edge-hardware}
-summarize this deployment gap.
+summarize this gap between policy requirements and edge hardware.
 
 \begin{table}[!htbp]
     \centering
@@ -167,33 +174,55 @@ summarize this deployment gap.
     }
 \end{table}
 
-\subsection{Quantization reduces memory traffic and latency.}
-On a Jetson AGX Orin,
-\href{https://arxiv.org/abs/2412.01034}{QAIL}
-reports that INT4 weight quantization reduces OpenVLA's memory
-footprint from 15.2 to 4.0~GB and inference latency from 955 to
-375~ms, providing approximately $2.5\times$ speedup and energy
-savings. Its INT8 configuration requires 7.9~GB and 574~ms. The benefits reflect the memory-sensitive nature of batch-size-one
-autoregressive decoding, which repeatedly reads model weights to
-generate actions. 
+Prior work has shown that quantization is an effective way to close
+this gap. On a Jetson AGX Orin,
+\href{https://arxiv.org/abs/2412.01034}{QAIL} reports that INT4 weight
+quantization reduces OpenVLA's memory footprint from 15.2 to 4.0~GB and
+its inference latency from 955 to 375~ms, an approximately $2.5\times$
+speedup with corresponding energy savings. These gains stem from the
+memory-bound nature of batch-size-one autoregressive decoding, which
+re-reads every model weight to generate each action token.
+However, quantization also reduces task accuracy. In the same
+evaluation, 4-bit AWQ lowers OpenVLA's average LIBERO success from
+74.0\% to 70.8\%, and LIBERO-Long success from 50.8\% to 47.2\%.
+Quantization-aware fine-tuning recovers much of this loss (73.1\%), but
+any single fixed precision still commits the policy to one point on the
+accuracy--efficiency tradeoff for every state it encounters.
 
-\subsection{Static precision leaves a task-dependent tradeoff.}
-Compression does not always preserve task success.
-In \href{https://arxiv.org/abs/2412.01034}{QAIL}'s evaluation,
-4-bit AWQ reduces OpenVLA's average LIBERO success from
-74.0\% to 70.8\%, with LIBERO-Long decreasing from 50.8\% to
-47.2\%. However, quantization-aware behavioral cloning recovers
-average success to 73.1\%. These results motivate precision
-management while establishing that a dynamic method should outperform
-strong fixed-precision baselines, not just naive quantization.
+This leads to the central question of our project:
+\begin{quote}
+\emph{How can robot policies be deployed efficiently on compute-limited
+edge devices while achieving both a high success rate and low latency?}
+\end{quote}
 
-\section{Proposed Approach}
-We will post-train multiple quantized versions of a robot policy at different bit-widths. We will then train a router in one of two ways:
-\begin{enumerate}[label=(\arabic*)]
-  \item \textbf{Supervised learning} on a labeled dataset generated by running the high-precision and quantized models on the same inputs.
-  \item \textbf{Reinforcement learning}, treating the router as a policy.
-\end{enumerate}
+Specifically, we propose learning a \emph{router} that, at each control
+step, switches among quantized versions of the same policy based on the
+complexity of the current state. Our hypothesis is that \emph{not all
+states require equal precision}: moving the arm through free space
+tolerates coarse actions, whereas grasping, insertion, and other
+contact-rich phases demand precise ones. Routing easy states to
+low-precision models and reserving high precision for critical states
+should therefore reduce average latency and energy while preserving the
+success rate of the full-precision policy.
 
+Previous work on dynamic precision for robot policies relies on
+heuristic routers.
+\href{https://arxiv.org/abs/2603.07904}{DyQ-VLA} switches activation
+precision using a hand-designed motion score with fixed thresholds, and
+\href{https://arxiv.org/abs/2607.24148}{MotionVQ} switches between
+coarse and fine weights based on a fixed motion threshold. Such
+heuristics must be tuned by hand and use motion as a proxy for how much
+precision a state actually needs. Instead, we propose a lightweight
+router learned offline. We label states visited by the policy with the
+estimated loss in performance from acting at each precision, train a
+small classifier on cheap features (proprioception, action history, and
+previous precision choices) to predict the cheapest acceptable
+precision, and refine it with DAgger-style data aggregation so that
+training states match those the routed policy visits. Because the
+router operates on features that are already available, its overhead is
+negligible relative to the savings from reduced precision.
+We also consider training the router with reinforcement learning,
+treating precision selection as a policy, as an extension.
 
 \section{Problem Formulation}
  
