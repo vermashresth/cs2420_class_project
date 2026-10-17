@@ -204,8 +204,6 @@ treating precision selection as a policy, as an extension.
 
 \section{Problem Formulation}
 
-\subsection{Setup}
-
 We model robot manipulation as a finite-horizon decision process with
 state space $\mathcal{S}$, action space $\mathcal{A}$, transition
 kernel $P$, initial-state distribution $\rho_0$, and horizon $T$.
@@ -242,6 +240,8 @@ Our goal is to maximize task success while minimizing compute:
   \label{eq:objective}
 \end{equation}
 where $\lambda \ge 0$ trades off success against compute.
+
+\section{Methodology}
 
 \subsection{Estimating the Precision Gap}
 
