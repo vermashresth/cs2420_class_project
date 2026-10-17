@@ -207,14 +207,16 @@ negligible relative to the savings from reduced precision.
 
 We model robot manipulation as a finite-horizon decision process with
 state space $\mathcal{S}$, action space $\mathcal{A}$, transition
-kernel $P$, initial-state distribution $\rho_0$, and horizon $T$.
+kernel $P$, reward function $r$, initial-state distribution $\rho_0$,
+and horizon $T$.
 The input to the policy at time $t$, which we write $s_t$, consists of
 the camera image, proprioception, and the language instruction.
-An episode $\tau = (s_0, a_0, \dots, s_T)$ either completes the task or
-does not; we denote success by the indicator $\mathrm{succ}(\tau) \in
-\{0,1\}$. We do not assume access to a dense reward or a learned value
-function, since VLA policies are trained by imitation rather than
-reinforcement learning.
+An episode $\tau = (s_0, a_0, \dots, s_T)$ receives return
+$R(\tau) = \sum_{t=0}^{T-1} r(s_t, a_t)$. The reward may be sparse,
+such as a binary task-success signal at the end of the episode, or
+denser, such as progress toward the goal. We do not assume access to a
+learned value function, since VLA policies are trained by imitation
+rather than reinforcement learning.
 
 Let $\pi_1$ be a pretrained full-precision VLA policy. Post-training
 quantization of $\pi_1$ yields a family of frozen policies
@@ -231,21 +233,21 @@ choice. The routed policy $\pi_\phi$ acts as
 \begin{equation}
   k_t \sim g_\phi(\cdot \mid z_t), \qquad a_t \sim \pi_{k_t}(\cdot \mid s_t).
 \end{equation}
-Our goal is to maximize task success while minimizing compute:
+Our goal is to maximize expected return while minimizing compute:
 \begin{equation}
-  \max_\phi \; S(\pi_\phi) - \lambda\, C(\pi_\phi),
+  \max_\phi \; J(\pi_\phi) - \lambda\, C(\pi_\phi),
   \qquad
-  S(\pi_\phi) = \Pr_{\tau \sim \pi_\phi}\big[\mathrm{succ}(\tau) = 1\big],
+  J(\pi_\phi) = \E_{\tau \sim \pi_\phi}\big[R(\tau)\big],
   \qquad
   C(\pi_\phi) = \E_{\tau \sim \pi_\phi}\Big[\sum_{t=0}^{T-1} c_{k_t}\Big],
   \label{eq:objective}
 \end{equation}
-where $\lambda \ge 0$ trades off success against compute.
+where $\lambda \ge 0$ trades off return against compute.
 
 \subsection{Estimating the Precision Gap}
 
 Optimizing Eq.~\eqref{eq:objective} directly would require knowing how
-a single low-precision decision changes the probability of success,
+a single low-precision decision changes the expected return,
 which is unavailable without a critic. Instead, we treat the
 full-precision policy as the reference behavior: a state tolerates low
 precision if the quantized policy behaves like $\pi_1$ there. We
@@ -285,10 +287,10 @@ $\pi_1$ throughout with the same random seed:
 where $x^{(k)}_{m,H}(s)$ is the end-effector and object state after
 $H$ steps in the $m$-th rollout and $d$ is a distance on that state.
 Running the rollouts to the end of the episode ($H = T - t$) and
-comparing success instead of state gives a direct Monte Carlo estimate
-of the drop in success probability,
-$\hat{\Delta}_k^{\mathrm{succ}}(s) = \frac{1}{M}\sum_{m}
-\big(\mathrm{succ}(\tau_m^{(1)}) - \mathrm{succ}(\tau_m^{(k)})\big)$,
+comparing returns instead of states gives a direct Monte Carlo
+estimate of the drop in expected return,
+$\hat{\Delta}_k^{R}(s) = \frac{1}{M}\sum_{m}
+\big(R(\tau_m^{(1)}) - R(\tau_m^{(k)})\big)$,
 at the highest cost. These estimators require resetting the simulator
 to arbitrary states, which LIBERO supports.
 
