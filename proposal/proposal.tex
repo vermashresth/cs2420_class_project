@@ -53,8 +53,8 @@ double the entire 8~GB shared memory of a
 Even the smaller $\pi_0$ contains approximately 3.3 billion parameters,
 requiring about 6.6~GB for its 16-bit weights alone, before accounting
 for inference buffers, perception, and control software.
-Even on a desktop RTX 4090, OpenVLA runs at only about 6 queries per
-second, while edge modules offer 4--10$\times$ less memory bandwidth.
+% Even on a desktop RTX 4090, OpenVLA runs at only about 6 queries per
+% second, while edge modules offer 4--10$\times$ less memory bandwidth.
 Figure~\ref{fig:deployment-gap} summarizes this gap between policy
 requirements and edge hardware.
 
@@ -157,16 +157,15 @@ this gap. On a Jetson AGX Orin,
 \href{https://arxiv.org/abs/2412.01034}{QAIL} reports that INT4 weight
 quantization reduces OpenVLA's memory footprint from 15.2 to 4.0~GB and
 its inference latency from 955 to 375~ms, an approximately $2.5\times$
-speedup with corresponding energy savings. These gains stem from the
-memory-bound nature of batch-size-one autoregressive decoding, which
-re-reads every model weight to generate each action token.
+% speedup with corresponding energy savings. These gains stem from the
+% memory-bound nature of batch-size-one autoregressive decoding, which
+% re-reads every model weight to generate each action token.
 However, quantization also reduces task accuracy. In the same
 evaluation, 4-bit AWQ lowers OpenVLA's average LIBERO success from
 74.0\% to 70.8\%, and LIBERO-Long success from 50.8\% to 47.2\%.
-Quantization-aware fine-tuning recovers much of this loss (73.1\%), but
-any single fixed precision still commits the policy to one point on the
-accuracy--efficiency tradeoff for every state it encounters.
-
+% Quantization-aware fine-tuning recovers much of this loss (73.1\%), but
+% any single fixed precision still commits the policy to one point on the
+% accuracy--efficiency tradeoff for every state it encounters.
 This leads to the central question of our project:
 \begin{quote}
 \emph{How can robot policies be deployed efficiently on compute-limited
@@ -199,12 +198,12 @@ precision, and refine it with DAgger-style data aggregation so that
 training states match those the routed policy visits. Because the
 router operates on features that are already available, its overhead is
 negligible relative to the savings from reduced precision.
-We also consider training the router with reinforcement learning,
-treating precision selection as a policy, as an extension.
+% We also consider training the router with reinforcement learning,
+% treating precision selection as a policy, as an extension.
 
 \section{Problem Formulation}
 
-\subsection{Setup}
+% \subsection{Setup}
 
 We model robot manipulation as a finite-horizon decision process with
 state space $\mathcal{S}$, action space $\mathcal{A}$, transition
